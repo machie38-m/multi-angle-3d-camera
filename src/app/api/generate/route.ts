@@ -1,83 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  buildCameraPrompt,
-  buildPollinationsPrompt,
-  type CameraParams,
-} from "@/lib/camera";
-import { loadZaiConfig, callZaiImageEdit } from "@/lib/zai-client";
-import { callPollinationsImageEdit } from "@/lib/pollinations-client";
+import { generateCameraEdit } from "@/lib/hf-space-client";
+import type { CameraParams } from "@/lib/camera";
 
 export const runtime = "nodejs";
-export const maxDuration = 300; // 5 min — generation can take a while
+export const maxDuration = 300; // 5 min — HF Space ZeroGPU queue can take 30s+
 
 interface GenerateRequest {
   image: string; // data URL (base64)
   params: CameraParams;
   size?: string;
-  subjectHint?: string; // optional user-provided subject hint (e.g. "a dog") — used by Pollinations
-}
-
-const SUPPORTED_SIZES = new Set([
-  "1024x1024",
-  "768x1344",
-  "864x1152",
-  "1344x768",
-  "1152x864",
-  "1440x720",
-  "720x1440",
-]);
-
-/**
- * Pick the closest supported size based on the source image's aspect ratio.
- */
-function pickSizeFromImage(dataUrl: string): string {
-  try {
-    const base64 = dataUrl.split(",")[1] ?? "";
-    const buffer = Buffer.from(base64, "base64");
-    if (buffer.length >= 24 && buffer[0] === 0x89 && buffer[1] === 0x50) {
-      const w = buffer.readUInt32BE(16);
-      const h = buffer.readUInt32BE(20);
-      return matchSize(w, h);
-    }
-    if (buffer.length >= 4 && buffer[0] === 0xff && buffer[1] === 0xd8) {
-      let i = 2;
-      while (i < buffer.length - 8) {
-        if (buffer[i] !== 0xff) break;
-        const marker = buffer[i + 1];
-        const segLen = buffer.readUInt16BE(i + 2);
-        if (
-          marker >= 0xc0 &&
-          marker <= 0xcf &&
-          marker !== 0xc4 &&
-          marker !== 0xc8 &&
-          marker !== 0xcc
-        ) {
-          const h = buffer.readUInt16BE(i + 5);
-          const w = buffer.readUInt16BE(i + 7);
-          return matchSize(w, h);
-        }
-        i += 2 + segLen;
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-  return "1024x1024";
-}
-
-function matchSize(w: number, h: number): string {
-  const ratio = w / h;
-  if (ratio > 1.5) return "1440x720";
-  if (ratio > 1.15) return "1344x768";
-  if (ratio < 0.6) return "720x1440";
-  if (ratio < 0.85) return "768x1344";
-  return "1024x1024";
 }
 
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as GenerateRequest;
-    const { image, params, size, subjectHint } = body;
+    const { image, params } = body;
 
     if (!image || !image.startsWith("data:image/")) {
       return NextResponse.json(
@@ -96,89 +33,40 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const finalSize =
-      size && SUPPORTED_SIZES.has(size) ? size : pickSizeFromImage(image);
-
-    // Build DIFFERENT prompts for Z.AI vs Pollinations:
-    //   - Z.AI image-edit is a proper img2img model that understands
-    //     elaborate camera jargon and preserves the subject automatically.
-    //   - Pollinations flux is a general image model that needs a simpler,
-    //     subject-explicit prompt to produce reliable results.
-    const zaiPrompt = buildCameraPrompt(params);
-    const pollinationsPrompt = buildPollinationsPrompt(params, subjectHint);
-
-    // Try providers in order of preference:
-    //   1. Z.AI sandbox config (auto-injected on Z.ai sandbox)
-    //   2. Z.AI public API (if ZAI_PUBLIC_API_KEY env var is set)
-    //   3. Pollinations.ai (free, no auth — always available)
-    const zaiConfig = await loadZaiConfig();
-
-    let base64: string | undefined;
-    let provider: "sandbox" | "zai-public" | "pollinations" = "pollinations";
-    let promptUsed = pollinationsPrompt;
-    let debugInfo: Record<string, unknown> = {};
-
-    if (zaiConfig) {
-      provider = zaiConfig.isSandbox ? "sandbox" : "zai-public";
-      promptUsed = zaiPrompt;
-      try {
-        const result = await callZaiImageEdit(zaiConfig, {
-          prompt: zaiPrompt,
-          image,
-          size: finalSize,
-        });
-        base64 = result.base64;
-        debugInfo.raw = JSON.stringify(result.raw).slice(0, 200);
-      } catch (apiErr) {
-        const msg = apiErr instanceof Error ? apiErr.message : String(apiErr);
-        console.error(`[/api/generate] ${provider} failed, falling back to Pollinations:`, msg);
-        // Fall through to Pollinations
-        provider = "pollinations";
-        promptUsed = pollinationsPrompt;
-      }
-    }
-
-    if (!base64 && provider === "pollinations") {
-      try {
-        const result = await callPollinationsImageEdit({
-          prompt: pollinationsPrompt,
-          imageDataUrl: image,
-          size: finalSize,
-        });
-        base64 = result.base64;
-        debugInfo.sourceUrl = result.sourceUrl;
-        debugInfo.pollinationsUrl = result.pollinationsUrl;
-      } catch (pollErr) {
-        const msg = pollErr instanceof Error ? pollErr.message : String(pollErr);
-        console.error("[/api/generate] Pollinations failed:", msg);
-        return NextResponse.json(
-          {
-            error:
-              "All image generation providers failed. Last error from Pollinations: " +
-              msg,
-          },
-          { status: 502 }
-        );
-      }
-    }
-
-    if (!base64) {
+    // Call HF Space Gradio API (multimodalart/qwen-image-multiple-angles-3d-camera)
+    // No API key required — runs anonymously on Hugging Face ZeroGPU.
+    let result;
+    try {
+      result = await generateCameraEdit(image, params);
+    } catch (apiErr) {
+      const msg = apiErr instanceof Error ? apiErr.message : String(apiErr);
+      console.error("[/api/generate] HF Space call failed:", msg);
       return NextResponse.json(
-        { error: "No image data returned from any provider.", debug: debugInfo },
+        {
+          error:
+            "Image generation failed. The HF Space may be sleeping or out of GPU capacity. " +
+            `Detail: ${msg}`,
+        },
         { status: 502 }
       );
     }
 
-    const dataUrl = `data:image/png;base64,${base64}`;
+    if (!result.base64) {
+      return NextResponse.json(
+        { error: "HF Space returned no image data." },
+        { status: 502 }
+      );
+    }
+
+    // HF Space returns WebP. Convert data URL mime to image/webp.
+    const dataUrl = `data:image/webp;base64,${result.base64}`;
 
     return NextResponse.json({
       image: dataUrl,
-      prompt: promptUsed,
+      prompt: result.prompt,
       params,
-      size: finalSize,
-      provider,
-      subjectHint: subjectHint ?? "",
-      debug: debugInfo,
+      seed: result.seed,
+      provider: "hf-space",
     });
   } catch (err: unknown) {
     console.error("[/api/generate] error:", err);
@@ -194,6 +82,7 @@ export async function GET() {
     service: "multi-angle-3d-camera",
     description:
       "POST a base64 image and camera params {azimuth, elevation, distance} to generate a new view.",
-    providers: ["sandbox", "zai-public", "pollinations"],
+    provider: "hf-space",
+    backend: "multimodalart/qwen-image-multiple-angles-3d-camera (Hugging Face Space)",
   });
 }

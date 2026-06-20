@@ -56,14 +56,6 @@ export function GenerateButton() {
         </p>
       )}
 
-      {provider === "pollinations" && !isGenerating && (
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-200/70 leading-relaxed">
-          Using free Pollinations.ai provider. For higher-quality results,
-          set the <code className="text-amber-200">ZAI_PUBLIC_API_KEY</code>{" "}
-          env var to your Z.AI public API key.
-        </p>
-      )}
-
       {error && (
         <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
           {error}

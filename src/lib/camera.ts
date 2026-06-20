@@ -1,11 +1,12 @@
 /**
  * Camera parameter helpers
  * - Azimuth:   -180° to +180°   (0 = front, + = right, - = left, ±180 = behind)
- * - Elevation: -90° to +90°     (0 = eye level, + = above, - = below)
- * - Distance:   0.5 to 3.0      (1 = original, <1 closer, >1 farther)
+ *              Internally normalized to 0-315° in 45° steps for the HF Space
+ *              backend (Qwen-Image-Edit LoRA was trained on discrete 45° steps).
+ * - Elevation: -30° to +60°     (HF Space limit; 0 = eye level, + = above, - = below)
+ * - Distance:   0.6 to 1.4      (HF Space limit; 1 = original, <1 closer, >1 farther)
  *
- * These get converted into a natural-language prompt that an image-edit
- * model can understand to re-render the scene from a new camera angle.
+ * These get sent to the HF Space Gradio API for image-edit-based view synthesis.
  */
 
 export interface CameraParams {
@@ -16,14 +17,14 @@ export interface CameraParams {
 
 export const CAMERA_LIMITS = {
   azimuth: { min: -180, max: 180, step: 5 },
-  elevation: { min: -90, max: 90, step: 5 },
-  distance: { min: 0.5, max: 3, step: 0.1 },
+  elevation: { min: -30, max: 60, step: 5 },
+  distance: { min: 0.6, max: 1.4, step: 0.05 },
 } as const;
 
 export const DEFAULT_CAMERA: CameraParams = {
-  azimuth: 30,
-  elevation: 15,
-  distance: 1.4,
+  azimuth: 45,
+  elevation: 0,
+  distance: 1.0,
 };
 
 /** Build a natural-language camera-angle prompt for the image-edit API. */
@@ -206,73 +207,73 @@ export const PRESETS: Preset[] = [
     id: "front",
     label: "Front",
     description: "Direct front view",
-    params: { azimuth: 0, elevation: 0, distance: 1 },
+    params: { azimuth: 0, elevation: 0, distance: 1.0 },
   },
   {
-    id: "right",
+    id: "right-45",
     label: "Right 45°",
     description: "Right three-quarter view",
-    params: { azimuth: 45, elevation: 0, distance: 1 },
-  },
-  {
-    id: "left",
-    label: "Left 45°",
-    description: "Left three-quarter view",
-    params: { azimuth: -45, elevation: 0, distance: 1 },
+    params: { azimuth: 45, elevation: 0, distance: 1.0 },
   },
   {
     id: "right-90",
     label: "Right Side",
     description: "Right side profile",
-    params: { azimuth: 90, elevation: 0, distance: 1.1 },
+    params: { azimuth: 90, elevation: 0, distance: 1.0 },
   },
   {
-    id: "left-90",
-    label: "Left Side",
-    description: "Left side profile",
-    params: { azimuth: -90, elevation: 0, distance: 1.1 },
+    id: "right-135",
+    label: "Right Back",
+    description: "Right rear three-quarter view",
+    params: { azimuth: 135, elevation: 0, distance: 1.0 },
   },
   {
     id: "back",
     label: "Back",
     description: "Behind the subject",
-    params: { azimuth: 180, elevation: 0, distance: 1 },
+    params: { azimuth: 180, elevation: 0, distance: 1.0 },
   },
   {
-    id: "high",
-    label: "High Angle",
-    description: "Looking down 45°",
-    params: { azimuth: 30, elevation: 45, distance: 1.4 },
+    id: "left-135",
+    label: "Left Back",
+    description: "Left rear three-quarter view",
+    params: { azimuth: -135, elevation: 0, distance: 1.0 },
   },
   {
-    id: "top",
-    label: "Top Down",
+    id: "left-90",
+    label: "Left Side",
+    description: "Left side profile",
+    params: { azimuth: -90, elevation: 0, distance: 1.0 },
+  },
+  {
+    id: "left-45",
+    label: "Left 45°",
+    description: "Left three-quarter view",
+    params: { azimuth: -45, elevation: 0, distance: 1.0 },
+  },
+  {
+    id: "high-30",
+    label: "High 30°",
+    description: "Slightly elevated",
+    params: { azimuth: 0, elevation: 30, distance: 1.0 },
+  },
+  {
+    id: "high-60",
+    label: "Top 60°",
     description: "Bird's-eye view",
-    params: { azimuth: 0, elevation: 80, distance: 1.8 },
+    params: { azimuth: 0, elevation: 60, distance: 1.0 },
   },
   {
-    id: "low",
-    label: "Low Angle",
+    id: "low-30",
+    label: "Low 30°",
     description: "Hero shot from below",
-    params: { azimuth: 0, elevation: -30, distance: 0.9 },
-  },
-  {
-    id: "wide",
-    label: "Wide Shot",
-    description: "Farther away",
-    params: { azimuth: 20, elevation: 10, distance: 2.3 },
+    params: { azimuth: 0, elevation: -30, distance: 1.0 },
   },
   {
     id: "closeup",
     label: "Close Up",
-    description: "Tight framing",
-    params: { azimuth: -20, elevation: 5, distance: 0.7 },
-  },
-  {
-    id: "cinematic",
-    label: "Cinematic",
-    description: "Dramatic 3/4 high",
-    params: { azimuth: -55, elevation: 25, distance: 1.6 },
+    description: "Tighter framing",
+    params: { azimuth: 0, elevation: 0, distance: 0.7 },
   },
 ];
 

@@ -12,7 +12,6 @@ import { buildCameraPrompt, describeCameraShort } from "@/lib/camera";
 export function useGenerate() {
   const sourceImage = useAppStore((s) => s.sourceImage);
   const camera = useAppStore((s) => s.camera);
-  const subjectHint = useAppStore((s) => s.subjectHint);
   const isGenerating = useAppStore((s) => s.isGenerating);
   const setGenerating = useAppStore((s) => s.setGenerating);
   const setResult = useAppStore((s) => s.setResult);
@@ -37,7 +36,6 @@ export function useGenerate() {
           body: JSON.stringify({
             image: sourceImage,
             params,
-            subjectHint: subjectHint.trim() || undefined,
           }),
         });
 
@@ -77,7 +75,6 @@ export function useGenerate() {
     [
       sourceImage,
       camera,
-      subjectHint,
       setGenerating,
       setError,
       setResult,

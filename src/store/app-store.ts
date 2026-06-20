@@ -17,7 +17,6 @@ interface AppState {
   // Input
   sourceImage: string | null;
   sourceName: string;
-  subjectHint: string; // optional user hint for Pollinations (e.g. "a dog")
 
   // Camera
   camera: CameraParams;
@@ -32,7 +31,6 @@ interface AppState {
 
   // Actions
   setSourceImage: (image: string | null, name?: string) => void;
-  setSubjectHint: (hint: string) => void;
   setCamera: (patch: Partial<CameraParams>) => void;
   resetCamera: () => void;
   setGenerating: (v: boolean) => void;
@@ -49,7 +47,6 @@ export const useAppStore = create<AppState>()(
     (set) => ({
       sourceImage: null,
       sourceName: "",
-      subjectHint: "",
       camera: { ...DEFAULT_CAMERA },
       isGenerating: false,
       lastResult: null,
@@ -58,8 +55,6 @@ export const useAppStore = create<AppState>()(
 
       setSourceImage: (image, name = "") =>
         set({ sourceImage: image, sourceName: name, error: null }),
-
-      setSubjectHint: (hint) => set({ subjectHint: hint }),
 
       setCamera: (patch) =>
         set((s) => ({ camera: { ...s.camera, ...patch } })),

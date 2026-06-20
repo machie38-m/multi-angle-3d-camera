@@ -3,24 +3,17 @@
 import { useEffect, useState } from "react";
 
 /**
- * Active generation provider. Determined at runtime by calling /api/status.
+ * Generation provider status. Determined at runtime by calling /api/status.
  *
- * - "loading"      — initial state, before status check completes
- * - "sandbox"      — Z.ai sandbox (auto-injected config, best quality)
- * - "zai-public"   — Z.AI public API key set via env var
- * - "pollinations" — Pollinations.ai free tier (always available as fallback)
+ * - "loading"   — initial state, before status check completes
+ * - "hf-space"  — using Hugging Face Space (always available, anonymous)
  */
-export type GenerationProvider =
-  | "loading"
-  | "sandbox"
-  | "zai-public"
-  | "pollinations";
+export type GenerationProvider = "loading" | "hf-space";
 
 interface StatusResponse {
   generationEnabled: boolean;
   provider: GenerationProvider;
-  mode?: string;
-  note?: string;
+  backend?: string;
 }
 
 let cachedStatus: StatusResponse | null = null;
@@ -37,11 +30,10 @@ async function fetchStatus(): Promise<StatusResponse> {
       return data;
     })
     .catch(() => {
-      // Network error — assume Pollinations fallback is available
+      // Network error — assume HF Space (default)
       const fallback: StatusResponse = {
         generationEnabled: true,
-        provider: "pollinations",
-        note: "Status check failed; assuming Pollinations fallback.",
+        provider: "hf-space",
       };
       cachedStatus = fallback;
       return fallback;
@@ -54,8 +46,7 @@ async function fetchStatus(): Promise<StatusResponse> {
 }
 
 /**
- * React hook that returns the active generation provider. Calls /api/status
- * once on mount and caches the result for the rest of the session.
+ * React hook that returns the active generation provider.
  */
 export function useGenerationProvider(): GenerationProvider {
   const [provider, setProvider] = useState<GenerationProvider>("loading");
@@ -73,50 +64,23 @@ export function useGenerationProvider(): GenerationProvider {
   return provider;
 }
 
-/**
- * Synchronous helper for code that runs outside React hooks.
- * Returns the cached provider if available, or null if not yet fetched.
- */
-export function getGenerationProviderSync(): GenerationProvider | null {
-  return cachedStatus?.provider ?? null;
-}
-
-/**
- * Returns true if generation is enabled. Always true — Pollinations is
- * always available as a fallback even without any API key.
- */
 export function isGenerationEnabled(): boolean {
   return cachedStatus?.generationEnabled ?? true;
 }
 
-/**
- * Returns a short human-friendly label for the active provider.
- * Used in the UI to give users transparency about which backend is in use.
- */
 export function getProviderLabel(provider: GenerationProvider): string {
   switch (provider) {
-    case "sandbox":
-      return "Z.ai Sandbox";
-    case "zai-public":
-      return "Z.AI Public API";
-    case "pollinations":
-      return "Pollinations.ai (free)";
+    case "hf-space":
+      return "Qwen Image Edit";
     case "loading":
       return "Checking…";
   }
 }
 
-/**
- * Returns a longer description of the active provider for tooltips.
- */
 export function getProviderDescription(provider: GenerationProvider): string {
   switch (provider) {
-    case "sandbox":
-      return "Running inside the Z.ai sandbox — full-quality image generation via Z.AI.";
-    case "zai-public":
-      return "Using Z.AI public API. Highest quality. Configured via ZAI_PUBLIC_API_KEY env var.";
-    case "pollinations":
-      return "Using Pollinations.ai free tier. No signup required, but quality may be lower than Z.AI. Set ZAI_PUBLIC_API_KEY for higher-quality generation.";
+    case "hf-space":
+      return "Powered by multimalart/qwen-image-multiple-angles-3d-camera on Hugging Face Space. Qwen-Image-Edit-2511 with Multiple-Angles LoRA for precise camera control. Free, anonymous, no signup.";
     case "loading":
       return "Checking which image generation provider is available…";
   }
