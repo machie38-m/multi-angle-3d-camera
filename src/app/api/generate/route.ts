@@ -1,13 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import ZAI from "z-ai-web-dev-sdk";
 import { buildCameraPrompt, type CameraParams } from "@/lib/camera";
-import { ensureZaiConfig } from "@/lib/zai-config";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // 5 min — generation can take a while
-
-// Ensure z-ai config is available before any SDK call.
-ensureZaiConfig();
 
 interface GenerateRequest {
   image: string; // data URL (base64)
@@ -26,20 +21,68 @@ const SUPPORTED_SIZES = new Set([
 ]);
 
 /**
- * Estimate whether an image looks more landscape or portrait, then pick
- * the best supported size to preserve its aspect ratio.
+ * Read Z.AI config from env vars, with fallback to the
+ * /etc/.z-ai-config file that exists on the Z.ai sandbox.
+ *
+ * On Vercel/other hosts, the user MUST set:
+ *   - ZAI_BASE_URL   e.g. https://api.z.ai/v1
+ *   - ZAI_API_KEY    your API key
+ *
+ * Optional:
+ *   - ZAI_CHAT_ID, ZAI_USER_ID, ZAI_TOKEN
+ */
+async function loadZaiConfig() {
+  // 1) Env vars (highest priority, works everywhere)
+  if (process.env.ZAI_BASE_URL && process.env.ZAI_API_KEY) {
+    return {
+      baseUrl: process.env.ZAI_BASE_URL.replace(/\/$/, ""),
+      apiKey: process.env.ZAI_API_KEY,
+      chatId: process.env.ZAI_CHAT_ID ?? "",
+      userId: process.env.ZAI_USER_ID ?? "",
+      token: process.env.ZAI_TOKEN ?? "",
+    };
+  }
+
+  // 2) Sandbox: read /etc/.z-ai-config
+  try {
+    const fs = await import("node:fs");
+    const raw = fs.readFileSync("/etc/.z-ai-config", "utf-8");
+    const cfg = JSON.parse(raw);
+    if (cfg.baseUrl && cfg.apiKey) return cfg;
+  } catch {
+    /* ignore */
+  }
+
+  // 3) Home dir
+  try {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const raw = fs.readFileSync(
+      path.join(os.homedir(), ".z-ai-config"),
+      "utf-8"
+    );
+    const cfg = JSON.parse(raw);
+    if (cfg.baseUrl && cfg.apiKey) return cfg;
+  } catch {
+    /* ignore */
+  }
+
+  return null;
+}
+
+/**
+ * Pick the closest supported size based on the source image's aspect ratio.
  */
 function pickSizeFromImage(dataUrl: string): string {
   try {
     const base64 = dataUrl.split(",")[1] ?? "";
     const buffer = Buffer.from(base64, "base64");
-    // Read PNG dimensions
     if (buffer.length >= 24 && buffer[0] === 0x89 && buffer[1] === 0x50) {
       const w = buffer.readUInt32BE(16);
       const h = buffer.readUInt32BE(20);
       return matchSize(w, h);
     }
-    // Read JPEG dimensions (SOFn marker scan)
     if (buffer.length >= 4 && buffer[0] === 0xff && buffer[1] === 0xd8) {
       let i = 2;
       while (i < buffer.length - 8) {
@@ -75,6 +118,70 @@ function matchSize(w: number, h: number): string {
   return "1024x1024";
 }
 
+/**
+ * Call the Z.AI image edit API directly with fetch.
+ * Endpoint: POST {baseUrl}/images/generations/edit
+ * Headers: Authorization: Bearer {apiKey}, plus optional X-Chat-Id / X-User-Id / X-Token
+ * Body: { prompt, images: [{ url }], size }
+ */
+async function callZaiImageEdit(
+  config: NonNullable<Awaited<ReturnType<typeof loadZaiConfig>>>,
+  body: {
+    prompt: string;
+    image: string; // data URL
+    size: string;
+  }
+): Promise<{ base64?: string; raw: unknown }> {
+  const url = `${config.baseUrl}/images/generations/edit`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${config.apiKey}`,
+    "X-Z-AI-From": "Z",
+  };
+  if (config.chatId) headers["X-Chat-Id"] = config.chatId;
+  if (config.userId) headers["X-User-Id"] = config.userId;
+  if (config.token) headers["X-Token"] = config.token;
+
+  const requestBody = {
+    prompt: body.prompt,
+    images: [{ url: body.image }],
+    size: body.size,
+  };
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(requestBody),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(
+      `Z.AI API ${response.status}: ${errorText.slice(0, 500)}`
+    );
+  }
+
+  const result = await response.json();
+
+  // Z.AI may return either base64 directly, or a URL we need to download
+  if (result?.data?.[0]?.base64) {
+    return { base64: result.data[0].base64, raw: result };
+  }
+
+  if (result?.data?.[0]?.url) {
+    const imgUrl = result.data[0].url as string;
+    const imgRes = await fetch(imgUrl);
+    if (!imgRes.ok) {
+      throw new Error(`Failed to download generated image: ${imgRes.status}`);
+    }
+    const arrayBuffer = await imgRes.arrayBuffer();
+    const base64 = Buffer.from(arrayBuffer).toString("base64");
+    return { base64, raw: result };
+  }
+
+  return { raw: result };
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as GenerateRequest;
@@ -97,33 +204,28 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const finalSize =
-      size && SUPPORTED_SIZES.has(size) ? size : pickSizeFromImage(image);
-
-    const prompt = buildCameraPrompt(params);
-
-    let zai;
-    try {
-      zai = await ZAI.create();
-    } catch (configErr) {
-      const msg =
-        configErr instanceof Error ? configErr.message : String(configErr);
+    const config = await loadZaiConfig();
+    if (!config) {
       return NextResponse.json(
         {
           error:
-            "Z.AI config not found. Set ZAI_BASE_URL and ZAI_API_KEY environment variables. " +
-            `Detail: ${msg}`,
+            "Z.AI config not found. Set ZAI_BASE_URL and ZAI_API_KEY environment variables in your Vercel project settings.",
         },
         { status: 500 }
       );
     }
 
-    let response;
+    const finalSize =
+      size && SUPPORTED_SIZES.has(size) ? size : pickSizeFromImage(image);
+
+    const prompt = buildCameraPrompt(params);
+
+    let result;
     try {
-      response = await zai.images.generations.edit({
+      result = await callZaiImageEdit(config, {
         prompt,
-        images: [{ url: image }],
-        size: finalSize as any,
+        image,
+        size: finalSize,
       });
     } catch (apiErr) {
       const msg = apiErr instanceof Error ? apiErr.message : String(apiErr);
@@ -139,15 +241,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!response?.data?.[0]?.base64) {
+    if (!result.base64) {
       return NextResponse.json(
-        { error: "Image edit API returned no image." },
+        {
+          error: "Image edit API returned no image data.",
+          raw: JSON.stringify(result.raw).slice(0, 500),
+        },
         { status: 502 }
       );
     }
 
-    const base64 = response.data[0].base64;
-    const dataUrl = `data:image/png;base64,${base64}`;
+    const dataUrl = `data:image/png;base64,${result.base64}`;
 
     return NextResponse.json({
       image: dataUrl,
