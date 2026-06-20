@@ -28,11 +28,30 @@
  *   4. Download the output image from /gradio_api/file=<path>
  */
 
-/** Default Space URLs to try (in order). */
+/**
+ * Default Space URLs to try (in order).
+ *
+ * These are public duplicate Spaces of multimodalart/qwen-image-multiple-angles-3d-camera
+ * that we've verified are alive and have the same /infer_camera_edit endpoint.
+ * Each Space has its own ZeroGPU quota, so failing over across them multiplies
+ * the effective capacity (8 Spaces × ~10h GPU/day = ~80h GPU/day free).
+ *
+ * Verified alive on 2026-06-20. We ping each one at startup via
+ * checkSpacesStatus() and only use the ones that respond.
+ *
+ * To get even more capacity, duplicate the Space to your own HF account
+ * (free) and add your URL via the HF_SPACE_URLS env var — it will be
+ * tried FIRST (before the public defaults) for dedicated quota.
+ */
 const DEFAULT_SPACE_URLS = [
   "https://multimodalart-qwen-image-multiple-angles-3d-camera.hf.space",
-  // User can add their own duplicated Spaces via HF_SPACE_URLS env var
-  // for dedicated ZeroGPU quota. Each duplicated Space adds ~10hrs/day free.
+  "https://bils-qwen-image-multiple-angles-3d-camera.hf.space",
+  "https://prashant-ai-ml-qwen-image-multiple-angles-3d-camera.hf.space",
+  "https://danilonovais-qwen-image-multiple-angles-3d-camera.hf.space",
+  "https://rideshare-qwen-image-multiple-angles-3d-camera.hf.space",
+  "https://mobowuhan-qwen-image-multiple-angles-3d-camera.hf.space",
+  "https://bobber-qwen-image-multiple-angles-3d-camera.hf.space",
+  "https://xeroize-qwen-image-multiple-angles-3d-camera.hf.space",
 ];
 
 /**
@@ -76,22 +95,40 @@ function pickSpaceOrder(spaceUrls: string[]): string[] {
 }
 
 /**
- * Get the list of Space URLs to try, from env var or default.
+ * Get the list of Space URLs to try, from env var + defaults.
  *
  * Env var format: comma-separated URLs, e.g.
  *   HF_SPACE_URLS=https://user1-space.hf.space,https://user2-space.hf.space
+ *
+ * If env var is set, those URLs are tried FIRST (user's own dedicated
+ * quota Spaces), then we append the public defaults as additional
+ * fallbacks for extra capacity. This means env var Spaces ADD capacity
+ * rather than REPLACE the defaults — total failover pool grows.
  */
 function getSpaceUrls(): string[] {
   const envUrls = process.env.HF_SPACE_URLS;
+  const userUrls: string[] = [];
+
   if (envUrls && envUrls.trim()) {
-    const urls = envUrls
+    const parsed = envUrls
       .split(",")
       .map((u) => u.trim())
       .filter(Boolean)
-      .map((u) => u.replace(/\/+$/, "")); // strip trailing slash
-    if (urls.length > 0) return urls;
+      .map((u) => u.replace(/\/+$/, ""));
+    userUrls.push(...parsed);
   }
-  return DEFAULT_SPACE_URLS;
+
+  // Deduplicate (in case user includes a default URL in env var)
+  const allUrls = [...userUrls, ...DEFAULT_SPACE_URLS];
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const url of allUrls) {
+    if (!seen.has(url)) {
+      seen.add(url);
+      unique.push(url);
+    }
+  }
+  return unique;
 }
 
 /** The fn_index for /infer_camera_edit in the Space config. */
