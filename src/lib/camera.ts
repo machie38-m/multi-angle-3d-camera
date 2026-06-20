@@ -50,26 +50,34 @@ export function buildCameraPrompt(params: CameraParams): string {
  * like "three-quarter right profile" or "rear-left angle, nearly behind the
  * subject" — those confuse it into generating unrelated subjects.
  *
- * This prompt builder:
- *   - Leads with a clear subject mention (from the user-provided hint)
- *   - Uses simple, direct angle words ("right side view", "from above", etc.)
- *   - Repeats the subject at the end to reinforce preservation
+ * This prompt builder is optimized through experimentation to:
+ *   - Lead with a STRONG subject mention (critical — without it the model
+ *     often hallucinates a different subject)
+ *   - Repeat the subject 2-3 times throughout the prompt to reinforce preservation
+ *   - Use simple, direct angle words ("right side view", "from above", etc.)
+ *   - Explicitly forbid subject substitution
+ *   - Emphasize that colors, lighting, and background should match the input
  *
- * The subjectHint is critical for Pollinations. Without it, results are
- * unreliable. If empty, the prompt is still built but quality will suffer.
+ * The subjectHint is critical for Pollinations. Without it, the prompt
+ * falls back to "the subject from the input image" which is much weaker.
  */
 export function buildPollinationsPrompt(
   params: CameraParams,
   subjectHint?: string
 ): string {
-  const subject = subjectHint?.trim() || "the subject";
+  const subject = subjectHint?.trim() || "the subject from the input image";
   const angleDesc = describeAngleSimple(params.azimuth, params.elevation);
   const distanceDesc = describeDistanceSimple(params.distance);
 
+  // Lead with subject. Repeat 3x. End with strong preservation instruction.
   return (
-    `A photo of ${subject}, photographed from a new camera angle: ${angleDesc}, ${distanceDesc}. ` +
-    `Same ${subject}, same colors, same lighting, same background environment. ` +
-    `Photorealistic photograph, sharp focus, high detail.`
+    `A photograph of ${subject}. ` +
+    `The same ${subject}, photographed from a new camera angle: ${angleDesc}, ${distanceDesc}. ` +
+    `The ${subject} must look identical to the input reference image — same appearance, ` +
+    `same colors, same fur or skin or material texture, same clothing or features, same ` +
+    `background environment, same lighting style. Only the camera position should change. ` +
+    `Do NOT replace the ${subject} with a different one. Photorealistic photograph, ` +
+    `sharp focus, high detail, professional photography.`
   );
 }
 
