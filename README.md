@@ -132,3 +132,10 @@ MIT — do whatever you want.
 
 - Original HF Space: [multimodalart/qwen-image-multiple-angles-3d-camera](https://huggingface.co/spaces/multimodalart/qwen-image-multiple-angles-3d-camera)
 - Built with [Next.js](https://nextjs.org), [shadcn/ui](https://ui.shadcn.com), [Tailwind CSS](https://tailwindcss.com), and [z-ai-web-dev-sdk](https://www.npmjs.com/package/z-ai-web-dev-sdk).
+
+## Live Demo
+
+[![Vercel](https://img.shields.io/badge/Vercel-Live-brightgreen?logo=vercel)](https://my-project-sage-three-98.vercel.app)
+[![GitHub](https://img.shields.io/badge/GitHub-Repo-blue?logo=github)](https://github.com/machie38-m/multi-angle-3d-camera)
+
+**Production URL**: https://my-project-sage-three-98.vercel.app
