@@ -40,6 +40,7 @@ export default function Home() {
   const isGenerating = useAppStore((s) => s.isGenerating);
   const history = useAppStore((s) => s.history);
   const removeHistory = useAppStore((s) => s.removeHistory);
+  const removeManyHistory = useAppStore((s) => s.removeManyHistory);
   const clearHistory = useAppStore((s) => s.clearHistory);
   const setResult = useAppStore((s) => s.setResult);
   const setCameraSilently = useAppStore((s) => s.setCamera);
@@ -223,6 +224,7 @@ export default function Home() {
                   history={history}
                   onSelect={handleSelectFromHistory}
                   onRemove={removeHistory}
+                  onRemoveMany={removeManyHistory}
                   onClear={clearHistory}
                   activeId={lastResult?.id}
                 />

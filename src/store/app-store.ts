@@ -40,6 +40,7 @@ interface AppState {
   setError: (err: string | null) => void;
   pushHistory: (item: GeneratedItem) => void;
   removeHistory: (id: string) => void;
+  removeManyHistory: (ids: string[]) => void;
   clearHistory: () => void;
 }
 
@@ -74,6 +75,17 @@ export const useAppStore = create<AppState>()(
 
       removeHistory: (id) =>
         set((s) => ({ history: s.history.filter((h) => h.id !== id) })),
+
+      removeManyHistory: (ids) =>
+        set((s) => {
+          const idSet = new Set(ids);
+          const newHistory = s.history.filter((h) => !idSet.has(h.id));
+          const newLastResult =
+            s.lastResult && idSet.has(s.lastResult.id)
+              ? null
+              : s.lastResult;
+          return { history: newHistory, lastResult: newLastResult };
+        }),
 
       clearHistory: () => set({ history: [], lastResult: null }),
     }),
