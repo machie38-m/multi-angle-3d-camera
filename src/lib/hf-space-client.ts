@@ -34,7 +34,7 @@
  * These are public duplicate Spaces of multimodalart/qwen-image-multiple-angles-3d-camera
  * that we've verified are alive and have the same /infer_camera_edit endpoint.
  * Each Space has its own ZeroGPU quota, so failing over across them multiplies
- * the effective capacity (8 Spaces × ~10h GPU/day = ~80h GPU/day free).
+ * the effective capacity (14 Spaces × ~10h GPU/day = ~140h GPU/day free).
  *
  * Verified alive on 2026-06-20. We ping each one at startup via
  * checkSpacesStatus() and only use the ones that respond.
@@ -52,6 +52,12 @@ const DEFAULT_SPACE_URLS = [
   "https://mobowuhan-qwen-image-multiple-angles-3d-camera.hf.space",
   "https://bobber-qwen-image-multiple-angles-3d-camera.hf.space",
   "https://xeroize-qwen-image-multiple-angles-3d-camera.hf.space",
+  "https://davidsalomonx-qwen-image-multiple-angles-3d-camera.hf.space",
+  "https://mrpino-qwen-image-multiple-angles-3d-camera.hf.space",
+  "https://jasonkneen-qwen-image-multiple-angles-3d-camera.hf.space",
+  "https://kirikir13-qwen-image-multiple-angles-3d-camera.hf.space",
+  "https://liuhahi-qwen-image-multiple-angles-3d-camera.hf.space",
+  "https://nickdigger-qwen-image-multiple-angles-3d-camera.hf.space",
 ];
 
 /**
