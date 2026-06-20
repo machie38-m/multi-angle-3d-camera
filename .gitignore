@@ -61,3 +61,4 @@ server.log
 # Worklog & scripts (sandbox-only)
 /worklog.md
 /scripts/test-*
+tool-results/
