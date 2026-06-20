@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import ZAI from "z-ai-web-dev-sdk";
 import { buildCameraPrompt, type CameraParams } from "@/lib/camera";
+import { ensureZaiConfig } from "@/lib/zai-config";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // 5 min — generation can take a while
+
+// Ensure z-ai config is available before any SDK call.
+ensureZaiConfig();
 
 interface GenerateRequest {
   image: string; // data URL (base64)
@@ -98,13 +102,42 @@ export async function POST(req: NextRequest) {
 
     const prompt = buildCameraPrompt(params);
 
-    const zai = await ZAI.create();
+    let zai;
+    try {
+      zai = await ZAI.create();
+    } catch (configErr) {
+      const msg =
+        configErr instanceof Error ? configErr.message : String(configErr);
+      return NextResponse.json(
+        {
+          error:
+            "Z.AI config not found. Set ZAI_BASE_URL and ZAI_API_KEY environment variables. " +
+            `Detail: ${msg}`,
+        },
+        { status: 500 }
+      );
+    }
 
-    const response = await zai.images.generations.edit({
-      prompt,
-      images: [{ url: image }],
-      size: finalSize,
-    });
+    let response;
+    try {
+      response = await zai.images.generations.edit({
+        prompt,
+        images: [{ url: image }],
+        size: finalSize as any,
+      });
+    } catch (apiErr) {
+      const msg = apiErr instanceof Error ? apiErr.message : String(apiErr);
+      console.error("[/api/generate] API call failed:", msg);
+      return NextResponse.json(
+        {
+          error:
+            "Image generation API call failed. If you are running outside the Z.ai sandbox, " +
+            "make sure ZAI_BASE_URL points to a reachable Z.AI endpoint. " +
+            `Detail: ${msg}`,
+        },
+        { status: 502 }
+      );
+    }
 
     if (!response?.data?.[0]?.base64) {
       return NextResponse.json(
