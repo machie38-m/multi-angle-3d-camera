@@ -373,16 +373,25 @@ function labelToSubjectHint(label: string): string {
 }
 
 /**
- * Auto-caption an image and return a subject hint.
+ * Auto-caption an image from a data URL and return a subject hint.
  *
- * @param imageEl An HTMLImageElement (or any image-like object transformers.js accepts)
+ * transformers.js's RawImage.read() accepts:
+ *   - string URL (including data: URLs)
+ *   - URL object
+ *   - Blob
+ *   - HTMLCanvasElement / OffscreenCanvas
+ *
+ * We pass the data URL string directly — transformers.js handles image
+ * loading internally via fetch + Image.
+ *
+ * @param dataUrl A data URL (data:image/...;base64,...) of the image to caption
  * @returns CaptionResult with top label + subject hint
  */
-export async function autoCaptionImage(
-  imageEl: HTMLImageElement
+export async function autoCaptionDataUrl(
+  dataUrl: string
 ): Promise<CaptionResult> {
   const classifier = await getPipeline();
-  const output = (await classifier(imageEl, { topk: 5 })) as Array<{
+  const output = (await classifier(dataUrl, { topk: 5 })) as Array<{
     label: string;
     score: number;
   }>;
@@ -396,27 +405,4 @@ export async function autoCaptionImage(
     subjectHint: labelToSubjectHint(top.label),
     top5,
   };
-}
-
-/**
- * Convenience wrapper: classify an image from a data URL.
- * Internally creates a temporary <img> element.
- */
-export async function autoCaptionDataUrl(
-  dataUrl: string
-): Promise<CaptionResult> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = async () => {
-      try {
-        const result = await autoCaptionImage(img);
-        resolve(result);
-      } catch (err) {
-        reject(err);
-      }
-    };
-    img.onerror = () => reject(new Error("Failed to load image for captioning"));
-    img.src = dataUrl;
-  });
 }
