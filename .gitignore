@@ -36,7 +36,6 @@ yarn-error.log*
 # vercel
 .vercel
 
-
 # typescript
 *.tsbuildinfo
 next-env.d.ts
@@ -50,5 +49,15 @@ test
 prompt
 
 server.log
-# Skills directory
+
+# Skills directory (sandbox-only)
 /skills/
+
+# Sandbox infra (sandbox-only, do not push)
+/.zscripts/
+/db/*.db
+/db/*.db-journal
+
+# Worklog & scripts (sandbox-only)
+/worklog.md
+/scripts/test-*
