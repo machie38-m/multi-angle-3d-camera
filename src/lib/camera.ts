@@ -42,6 +42,76 @@ export function buildCameraPrompt(params: CameraParams): string {
   return prompt;
 }
 
+/**
+ * Build a SIMPLIFIED camera-angle prompt for Pollinations.ai's flux model.
+ *
+ * Pollinations is a general-purpose text-to-image model that takes the input
+ * image as a weak reference. It does NOT understand elaborate camera jargon
+ * like "three-quarter right profile" or "rear-left angle, nearly behind the
+ * subject" — those confuse it into generating unrelated subjects.
+ *
+ * This prompt builder:
+ *   - Leads with a clear subject mention (from the user-provided hint)
+ *   - Uses simple, direct angle words ("right side view", "from above", etc.)
+ *   - Repeats the subject at the end to reinforce preservation
+ *
+ * The subjectHint is critical for Pollinations. Without it, results are
+ * unreliable. If empty, the prompt is still built but quality will suffer.
+ */
+export function buildPollinationsPrompt(
+  params: CameraParams,
+  subjectHint?: string
+): string {
+  const subject = subjectHint?.trim() || "the subject";
+  const angleDesc = describeAngleSimple(params.azimuth, params.elevation);
+  const distanceDesc = describeDistanceSimple(params.distance);
+
+  return (
+    `A photo of ${subject}, photographed from a new camera angle: ${angleDesc}, ${distanceDesc}. ` +
+    `Same ${subject}, same colors, same lighting, same background environment. ` +
+    `Photorealistic photograph, sharp focus, high detail.`
+  );
+}
+
+/** Simplified azimuth + elevation description for general image models. */
+function describeAngleSimple(az: number, el: number): string {
+  const a = Math.round(az);
+  const e = Math.round(el);
+  const parts: string[] = [];
+
+  // Azimuth → simple direction word
+  if (a === 0) parts.push("front view");
+  else if (a === 180 || a === -180) parts.push("back view from behind");
+  else if (a > 0 && a <= 30) parts.push("slight right of front");
+  else if (a > 30 && a <= 60) parts.push("right three-quarter view");
+  else if (a > 60 && a <= 120) parts.push("right side view");
+  else if (a > 120 && a < 180) parts.push("back-right three-quarter view");
+  else if (a < 0 && a >= -30) parts.push("slight left of front");
+  else if (a < -30 && a >= -60) parts.push("left three-quarter view");
+  else if (a < -60 && a >= -120) parts.push("left side view");
+  else if (a < -120 && a > -180) parts.push("back-left three-quarter view");
+
+  // Elevation → simple angle word
+  if (e === 0) parts.push("eye-level");
+  else if (e > 0 && e <= 20) parts.push("slightly elevated");
+  else if (e > 20 && e <= 45) parts.push("high angle looking down");
+  else if (e > 45) parts.push("top-down view from above");
+  else if (e < 0 && e >= -20) parts.push("slightly low angle");
+  else if (e < -20 && e >= -45) parts.push("low angle looking up");
+  else parts.push("worm's-eye view from below");
+
+  return parts.join(", ");
+}
+
+function describeDistanceSimple(d: number): string {
+  if (d < 0.7) return "extreme close-up";
+  if (d < 1.0) return "closer crop";
+  if (d <= 1.05) return "same distance as original";
+  if (d <= 1.5) return "slightly pulled back";
+  if (d <= 2.2) return "wider shot";
+  return "distant wide shot";
+}
+
 function describeAzimuth(az: number): string {
   const a = Math.round(az);
   const abs = Math.abs(a);

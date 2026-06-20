@@ -113,7 +113,7 @@ function parseSize(size: string): { width: number; height: number } {
  * Returns the generated image as base64.
  */
 export async function callPollinationsImageEdit(params: {
-  prompt: string;
+  prompt: string; // already-built Pollinations-style prompt (use buildPollinationsPrompt)
   imageDataUrl: string; // base64 data URL of the source image
   size: string;
 }): Promise<PollinationsResult> {

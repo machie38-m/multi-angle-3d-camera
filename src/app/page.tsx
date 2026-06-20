@@ -18,6 +18,7 @@ import { ResultViewer } from "@/components/camera/result-viewer";
 import { HistoryGallery } from "@/components/camera/history-gallery";
 import { GenerateButton } from "@/components/camera/generate-button";
 import { ProviderBadge } from "@/components/camera/provider-badge";
+import { SubjectHintInput } from "@/components/camera/subject-hint-input";
 import {
   Dialog,
   DialogContent,
@@ -165,6 +166,9 @@ export default function Home() {
                 onImage={(img, name) => setSourceImage(img, name)}
                 disabled={isGenerating}
               />
+              <div className="mt-4">
+                <SubjectHintInput />
+              </div>
             </Card>
 
             <Card title="2. Set Camera Angle" icon={<Sparkles className="h-4 w-4" />}>

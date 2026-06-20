@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { buildCameraPrompt, type CameraParams } from "@/lib/camera";
+import {
+  buildCameraPrompt,
+  buildPollinationsPrompt,
+  type CameraParams,
+} from "@/lib/camera";
 import { loadZaiConfig, callZaiImageEdit } from "@/lib/zai-client";
 import { callPollinationsImageEdit } from "@/lib/pollinations-client";
 
@@ -10,6 +14,7 @@ interface GenerateRequest {
   image: string; // data URL (base64)
   params: CameraParams;
   size?: string;
+  subjectHint?: string; // optional user-provided subject hint (e.g. "a dog") — used by Pollinations
 }
 
 const SUPPORTED_SIZES = new Set([
@@ -72,7 +77,7 @@ function matchSize(w: number, h: number): string {
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as GenerateRequest;
-    const { image, params, size } = body;
+    const { image, params, size, subjectHint } = body;
 
     if (!image || !image.startsWith("data:image/")) {
       return NextResponse.json(
@@ -94,7 +99,13 @@ export async function POST(req: NextRequest) {
     const finalSize =
       size && SUPPORTED_SIZES.has(size) ? size : pickSizeFromImage(image);
 
-    const prompt = buildCameraPrompt(params);
+    // Build DIFFERENT prompts for Z.AI vs Pollinations:
+    //   - Z.AI image-edit is a proper img2img model that understands
+    //     elaborate camera jargon and preserves the subject automatically.
+    //   - Pollinations flux is a general image model that needs a simpler,
+    //     subject-explicit prompt to produce reliable results.
+    const zaiPrompt = buildCameraPrompt(params);
+    const pollinationsPrompt = buildPollinationsPrompt(params, subjectHint);
 
     // Try providers in order of preference:
     //   1. Z.AI sandbox config (auto-injected on Z.ai sandbox)
@@ -104,13 +115,15 @@ export async function POST(req: NextRequest) {
 
     let base64: string | undefined;
     let provider: "sandbox" | "zai-public" | "pollinations" = "pollinations";
+    let promptUsed = pollinationsPrompt;
     let debugInfo: Record<string, unknown> = {};
 
     if (zaiConfig) {
       provider = zaiConfig.isSandbox ? "sandbox" : "zai-public";
+      promptUsed = zaiPrompt;
       try {
         const result = await callZaiImageEdit(zaiConfig, {
-          prompt,
+          prompt: zaiPrompt,
           image,
           size: finalSize,
         });
@@ -121,13 +134,14 @@ export async function POST(req: NextRequest) {
         console.error(`[/api/generate] ${provider} failed, falling back to Pollinations:`, msg);
         // Fall through to Pollinations
         provider = "pollinations";
+        promptUsed = pollinationsPrompt;
       }
     }
 
     if (!base64 && provider === "pollinations") {
       try {
         const result = await callPollinationsImageEdit({
-          prompt,
+          prompt: pollinationsPrompt,
           imageDataUrl: image,
           size: finalSize,
         });
@@ -159,10 +173,11 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       image: dataUrl,
-      prompt,
+      prompt: promptUsed,
       params,
       size: finalSize,
       provider,
+      subjectHint: subjectHint ?? "",
       debug: debugInfo,
     });
   } catch (err: unknown) {
