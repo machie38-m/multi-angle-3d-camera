@@ -1,0 +1,56 @@
+"use client";
+
+import { Sparkles, Loader2, ImageOff } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useGenerate } from "@/components/camera/use-generate";
+import { useAppStore } from "@/store/app-store";
+import { cn } from "@/lib/utils";
+
+export function GenerateButton() {
+  const { generate, isGenerating, canGenerate } = useGenerate();
+  const sourceImage = useAppStore((s) => s.sourceImage);
+  const error = useAppStore((s) => s.error);
+
+  return (
+    <div className="space-y-2">
+      <Button
+        type="button"
+        size="lg"
+        onClick={() => generate()}
+        disabled={!canGenerate}
+        className={cn(
+          "w-full gap-2 h-12 text-sm font-semibold",
+          "bg-gradient-to-r from-primary to-primary/80 text-primary-foreground",
+          "hover:from-primary/90 hover:to-primary/70",
+          "border border-primary/40 glow-emerald",
+          "disabled:opacity-50 disabled:cursor-not-allowed"
+        )}
+      >
+        {isGenerating ? (
+          <>
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Generating…
+          </>
+        ) : (
+          <>
+            <Sparkles className="h-4 w-4" />
+            Generate New Angle
+          </>
+        )}
+      </Button>
+
+      {!sourceImage && (
+        <p className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
+          <ImageOff className="h-3 w-3" />
+          Upload a photo to enable generation
+        </p>
+      )}
+
+      {error && (
+        <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
