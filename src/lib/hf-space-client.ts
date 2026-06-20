@@ -1,25 +1,56 @@
 /**
- * Hugging Face Space Gradio API client.
+ * Hugging Face Space Gradio API client with multi-Space failover.
  *
  * Calls the multimodalart/qwen-image-multiple-angles-3d-camera Space
- * directly via its public Gradio API. No API key required — the Space
- * runs anonymously on Hugging Face's ZeroGPU infrastructure.
+ * (or any user-configured duplicate) via its public Gradio API.
  *
- * API docs: https://huggingface.co/spaces/multimodalart/qwen-image-multiple-angles-3d-camera/agents.md
+ * ## Multi-Space failover
  *
- * Flow:
+ * To provide "unlimited" GPU capacity, this client tries multiple HF
+ * Spaces in order. If one is sleeping, has a long queue, or errors out,
+ * the next one is tried automatically.
+ *
+ * Sources of Space URLs (in priority order):
+ *   1. `HF_SPACE_URLS` env var — comma-separated list of full Space URLs
+ *      (e.g. "https://my-account/qwen-image-multiple-angles-3d-camera.hf.space,https://...")
+ *      Set this if you duplicate the Space to your own HF account for
+ *      dedicated ZeroGPU quota. Get your own at:
+ *      https://huggingface.co/spaces/multimodalart/qwen-image-multiple-angles-3d-camera?duplicate=true
+ *   2. Default: the original public Space (shared quota with everyone)
+ *
+ * ## API flow (per HF Space agents.md)
+ *
  *   1. POST /gradio_api/upload with the source image → get server-side path
  *   2. POST /gradio_api/queue/join with fn_index=7 (/infer_camera_edit)
  *      → get event_id
  *   3. GET /gradio_api/queue/data?session_hash=<uuid> (SSE stream)
  *      → wait for process_completed event with output image URL
  *   4. Download the output image from /gradio_api/file=<path>
- *
- * Total time: typically 15-30 seconds depending on ZeroGPU queue.
  */
 
-const SPACE_BASE =
-  "https://multimodalart-qwen-image-multiple-angles-3d-camera.hf.space";
+/** Default Space URLs to try (in order). */
+const DEFAULT_SPACE_URLS = [
+  "https://multimodalart-qwen-image-multiple-angles-3d-camera.hf.space",
+];
+
+/**
+ * Get the list of Space URLs to try, from env var or default.
+ *
+ * Env var format: comma-separated URLs, e.g.
+ *   HF_SPACE_URLS=https://user1-space.hf.space,https://user2-space.hf.space
+ */
+function getSpaceUrls(): string[] {
+  const envUrls = process.env.HF_SPACE_URLS;
+  if (envUrls && envUrls.trim()) {
+    const urls = envUrls
+      .split(",")
+      .map((u) => u.trim())
+      .filter(Boolean)
+      .map((u) => u.replace(/\/+$/, "")); // strip trailing slash
+    if (urls.length > 0) return urls;
+  }
+  return DEFAULT_SPACE_URLS;
+}
 
 /** The fn_index for /infer_camera_edit in the Space config. */
 const FN_INDEX_INFER_CAMERA_EDIT = 7;
@@ -35,65 +66,46 @@ export interface HfSpaceResult {
   seed: number;
   prompt: string;
   outputUrl: string;
+  spaceUrl: string; // which Space served this request
 }
 
 /**
  * Convert our internal CameraParams (azimuth -180 to 180) to HF Space's
  * expected range (0 to 315, in 45-degree steps for LoRA conditioning).
- *
- * The HF Space uses a Qwen-Image-Edit-2511-Multiple-Angles-LoRA which
- * was trained on discrete 45° azimuth steps: 0, 45, 90, 135, 180, 225,
- * 270, 315. We snap to the nearest 45° to match the LoRA's training data.
- *
- * Elevation range is -30 to 60 (also discrete), distance 0.6 to 1.4.
  */
 export function convertToHfSpaceParams(params: {
   azimuth: number;
   elevation: number;
   distance: number;
 }): HfSpaceCameraParams {
-  // Snap azimuth to nearest 45° step in 0-315 range
-  // -180 → 180, -135 → 225, -90 → 270, -45 → 315, 0 → 0, 45 → 45, etc.
   let azNormalized = params.azimuth;
   while (azNormalized < 0) azNormalized += 360;
   while (azNormalized >= 360) azNormalized -= 360;
 
-  // Snap to nearest 45° step
   const snappedAz = Math.round(azNormalized / 45) * 45;
-  // 360 wraps back to 0
   const finalAz = snappedAz === 360 ? 0 : snappedAz;
-
-  // Clamp elevation to -30..60
-  const el = Math.max(-30, Math.min(60, params.elevation));
-
-  // Clamp distance to 0.6..1.4
-  const dist = Math.max(0.6, Math.min(1.4, params.distance));
 
   return {
     azimuth: finalAz,
-    elevation: el,
-    distance: dist,
+    elevation: Math.max(-30, Math.min(60, params.elevation)),
+    distance: Math.max(0.6, Math.min(1.4, params.distance)),
   };
 }
 
 /**
- * Upload an image to the HF Space and return the server-side path.
+ * Upload an image to a specific HF Space.
  */
-async function uploadImage(dataUrl: string): Promise<{
-  path: string;
-  size: number;
-  mimeType: string;
-}> {
-  // Parse data URL
+async function uploadImage(
+  spaceUrl: string,
+  dataUrl: string
+): Promise<{ path: string; size: number; mimeType: string }> {
   const match = dataUrl.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
-  if (!match) {
-    throw new Error("Invalid data URL format");
-  }
+  if (!match) throw new Error("Invalid data URL format");
+
   const mimeType = match[1];
   const base64 = match[2];
   const buffer = Buffer.from(base64, "base64");
 
-  // Determine extension
   const ext =
     mimeType === "image/jpeg"
       ? "jpg"
@@ -104,45 +116,47 @@ async function uploadImage(dataUrl: string): Promise<{
           : "img";
   const filename = `upload-${Date.now()}.${ext}`;
 
-  // Build multipart form
   const formData = new FormData();
   const blob = new Blob([buffer], { type: mimeType });
   formData.append("files", blob, filename);
 
-  const response = await fetch(`${SPACE_BASE}/gradio_api/upload`, {
+  const response = await fetch(`${spaceUrl}/gradio_api/upload`, {
     method: "POST",
     body: formData,
   });
 
   if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(
-      `HF Space upload failed: ${response.status} ${errText.slice(0, 200)}`
-    );
+    throw new Error(`Upload failed: ${response.status}`);
   }
 
   const result = (await response.json()) as string[];
   if (!Array.isArray(result) || !result[0]) {
-    throw new Error(`HF Space upload returned no path: ${JSON.stringify(result)}`);
+    throw new Error("Upload returned no path");
   }
 
-  return {
-    path: result[0],
-    size: buffer.length,
-    mimeType,
-  };
+  return { path: result[0], size: buffer.length, mimeType };
 }
 
 /**
- * Poll the queue stream for completion.
+ * Stream the queue until process_completed. Returns the result.
  *
- * Returns the output image URL when process_completed is received.
+ * If `maxQueueSize` is set and the initial queue size exceeds it, throws
+ * an error immediately so the caller can try the next Space.
  */
 async function streamUntilComplete(
+  spaceUrl: string,
   sessionHash: string,
-  timeoutMs = 280000
+  options: {
+    timeoutMs?: number;
+    maxQueueSize?: number;
+    maxQueueEtaSeconds?: number;
+  } = {}
 ): Promise<{ imageUrl: string; seed: number; prompt: string }> {
-  const streamUrl = `${SPACE_BASE}/gradio_api/queue/data?session_hash=${encodeURIComponent(
+  const timeoutMs = options.timeoutMs ?? 280000;
+  const maxQueueSize = options.maxQueueSize ?? 50; // skip if >50 in queue
+  const maxQueueEtaSeconds = options.maxQueueEtaSeconds ?? 180; // skip if eta >3min
+
+  const streamUrl = `${spaceUrl}/gradio_api/queue/data?session_hash=${encodeURIComponent(
     sessionHash
   )}`;
 
@@ -156,24 +170,18 @@ async function streamUntilComplete(
     });
 
     if (!response.ok || !response.body) {
-      throw new Error(
-        `HF Space stream failed: ${response.status} ${response.statusText}`
-      );
+      throw new Error(`Stream failed: ${response.status}`);
     }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    let lastRank = 0;
-    let lastLog = "";
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
-
-      // Process complete SSE messages (separated by \n\n)
       const messages = buffer.split("\n\n");
       buffer = messages.pop() ?? "";
 
@@ -193,63 +201,53 @@ async function streamUntilComplete(
           const msgType = data.msg || data.type;
 
           if (msgType === "estimation") {
-            lastRank = data.rank ?? 0;
+            const queueSize = data.queue_size ?? 0;
+            const eta = data.rank_eta ?? 0;
             console.log(
-              `[hf-space] Queue rank: ${lastRank}, size: ${data.queue_size}, eta: ${data.rank_eta}s`
+              `[hf-space] ${spaceUrl} queue: rank=${data.rank}/${queueSize}, eta=${eta}s`
             );
+            // If queue is too long, abandon this Space and try the next one
+            if (queueSize > maxQueueSize || eta > maxQueueEtaSeconds) {
+              throw new Error(
+                `Queue too long (size=${queueSize}, eta=${eta}s) — trying next Space`
+              );
+            }
           } else if (msgType === "log") {
-            lastLog = data.log || "";
-            console.log(`[hf-space] ${data.level || "info"}: ${lastLog}`);
-          } else if (msgType === "process_starts") {
-            console.log("[hf-space] Process starting on GPU...");
-          } else if (msgType === "process_generating") {
-            console.log("[hf-space] Generating...");
+            console.log(`[hf-space] ${data.level || "info"}: ${data.log}`);
           } else if (msgType === "process_completed") {
-            console.log("[hf-space] ✅ Completed!");
             const output = data.output?.data;
             if (!output || !output[0]) {
-              throw new Error(
-                `HF Space completed but no output: ${JSON.stringify(data.output).slice(0, 300)}`
-              );
+              throw new Error("No output in process_completed");
             }
             const outputImage = output[0];
             const seed = output[1] ?? 0;
             const prompt = output[2] ?? "";
-
-            // Get image URL — HF Space returns both path and url
             const imageUrl =
               outputImage.url ||
-              `${SPACE_BASE}/gradio_api/file=${outputImage.path}`;
-
+              `${spaceUrl}/gradio_api/file=${outputImage.path}`;
             return { imageUrl, seed, prompt };
           } else if (msgType === "close_stream") {
-            // Stream ended without completion — likely an error
-            throw new Error(
-              `HF Space stream closed unexpectedly. Last log: ${lastLog}`
-            );
+            throw new Error("Stream closed without completion");
           } else if (msgType === "error") {
             throw new Error(
-              `HF Space error: ${data.message || JSON.stringify(data).slice(0, 300)}`
+              `HF Space error: ${data.message || JSON.stringify(data).slice(0, 200)}`
             );
           }
         }
       }
     }
 
-    throw new Error("HF Space stream ended without process_completed event");
+    throw new Error("Stream ended without process_completed");
   } finally {
     clearTimeout(timeout);
   }
 }
 
 /**
- * Generate a camera-angle edit via the HF Space Gradio API.
- *
- * @param sourceImageDataUrl Data URL of the source image
- * @param params Camera parameters (azimuth, elevation, distance)
- * @returns Result with base64 image + seed + prompt
+ * Try a single Space — upload + join queue + stream + download result.
  */
-export async function generateCameraEdit(
+async function trySingleSpace(
+  spaceUrl: string,
   sourceImageDataUrl: string,
   params: { azimuth: number; elevation: number; distance: number },
   options?: {
@@ -262,11 +260,9 @@ export async function generateCameraEdit(
   }
 ): Promise<HfSpaceResult> {
   const hfParams = convertToHfSpaceParams(params);
-  console.log("[hf-space] Converted params:", params, "→", hfParams);
 
-  // Step 1: Upload image
-  const uploaded = await uploadImage(sourceImageDataUrl);
-  console.log("[hf-space] Uploaded:", uploaded.path);
+  // Step 1: Upload
+  const uploaded = await uploadImage(spaceUrl, sourceImageDataUrl);
 
   // Step 2: Join queue
   const sessionHash =
@@ -282,8 +278,6 @@ export async function generateCameraEdit(
     meta: { _type: "gradio.FileData" },
   };
 
-  // Order: [image, azimuth, elevation, distance, seed, randomize_seed,
-  //         guidance_scale, num_inference_steps, height, width]
   const dataPayload = [
     imageData,
     hfParams.azimuth,
@@ -297,7 +291,7 @@ export async function generateCameraEdit(
     options?.width ?? 1024,
   ];
 
-  const joinResponse = await fetch(`${SPACE_BASE}/gradio_api/queue/join`, {
+  const joinResponse = await fetch(`${spaceUrl}/gradio_api/queue/join`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -308,24 +302,16 @@ export async function generateCameraEdit(
   });
 
   if (!joinResponse.ok) {
-    const errText = await joinResponse.text();
-    throw new Error(
-      `HF Space join failed: ${joinResponse.status} ${errText.slice(0, 200)}`
-    );
+    throw new Error(`Join failed: ${joinResponse.status}`);
   }
 
-  const joinResult = (await joinResponse.json()) as { event_id: string };
-  console.log("[hf-space] Joined queue:", joinResult.event_id);
-
   // Step 3: Stream until completion
-  const { imageUrl, seed, prompt } = await streamUntilComplete(sessionHash);
+  const { imageUrl, seed, prompt } = await streamUntilComplete(spaceUrl, sessionHash);
 
-  // Step 4: Download the result image
+  // Step 4: Download result
   const imgResponse = await fetch(imageUrl);
   if (!imgResponse.ok) {
-    throw new Error(
-      `HF Space result download failed: ${imgResponse.status} ${imgResponse.statusText}`
-    );
+    throw new Error(`Result download failed: ${imgResponse.status}`);
   }
 
   const arrayBuffer = await imgResponse.arrayBuffer();
@@ -336,5 +322,88 @@ export async function generateCameraEdit(
     seed,
     prompt,
     outputUrl: imageUrl,
+    spaceUrl,
   };
+}
+
+/**
+ * Generate a camera-angle edit with automatic multi-Space failover.
+ *
+ * Tries each Space URL in order. If a Space has a long queue (>50 people
+ * or >3min ETA), errors out, or is sleeping, the next Space is tried.
+ *
+ * To add more capacity, duplicate the Space to your own HF account and
+ * set the HF_SPACE_URLS env var with your Space URL(s):
+ *
+ *   HF_SPACE_URLS=https://youruser-qwen-image-multiple-angles-3d-camera.hf.space
+ *
+ * Duplicating gives you dedicated ZeroGPU quota separate from the public
+ * Space. Multiple URLs can be comma-separated for round-robin failover.
+ */
+export async function generateCameraEdit(
+  sourceImageDataUrl: string,
+  params: { azimuth: number; elevation: number; distance: number },
+  options?: {
+    seed?: number;
+    randomizeSeed?: boolean;
+    guidanceScale?: number;
+    numInferenceSteps?: number;
+    width?: number;
+    height?: number;
+  }
+): Promise<HfSpaceResult> {
+  const spaceUrls = getSpaceUrls();
+  const errors: string[] = [];
+
+  for (let i = 0; i < spaceUrls.length; i++) {
+    const spaceUrl = spaceUrls[i];
+    console.log(
+      `[hf-space] Trying Space ${i + 1}/${spaceUrls.length}: ${spaceUrl}`
+    );
+    try {
+      const result = await trySingleSpace(spaceUrl, sourceImageDataUrl, params, options);
+      console.log(`[hf-space] ✅ Success from ${spaceUrl}`);
+      return result;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[hf-space] ❌ ${spaceUrl} failed: ${msg}`);
+      errors.push(`${spaceUrl}: ${msg}`);
+      // Continue to next Space
+    }
+  }
+
+  throw new Error(
+    `All HF Spaces failed. Tried ${spaceUrls.length} Space(s). Errors:\n${errors.join("\n")}\n\n` +
+      `To add more capacity, duplicate the Space to your own HF account:\n` +
+      `https://huggingface.co/spaces/multimodalart/qwen-image-multiple-angles-3d-camera?duplicate=true\n` +
+      `Then set HF_SPACE_URLS env var with your Space URL.`
+  );
+}
+
+/**
+ * Check the status of all configured Spaces (for the /api/status endpoint).
+ * Returns a list with each Space's reachability.
+ */
+export async function checkSpacesStatus(): Promise<
+  Array<{ url: string; ok: boolean; queueSize?: number }>
+> {
+  const spaceUrls = getSpaceUrls();
+  const results = await Promise.all(
+    spaceUrls.map(async (url) => {
+      try {
+        const response = await fetch(`${url}/gradio_api/info`, {
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!response.ok) return { url, ok: false };
+        const data = (await response.json()) as {
+          named_endpoints?: Record<string, unknown>;
+        };
+        const hasInfer = !!data.named_endpoints?.["/infer_camera_edit"];
+        return { url, ok: hasInfer };
+      } catch {
+        return { url, ok: false };
+      }
+    })
+  );
+  return results;
 }

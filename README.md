@@ -87,6 +87,60 @@ src/
     └── app-store.ts             # Zustand store with persist (history survives reloads)
 ```
 
+## Unlimited GPU Capacity (Multi-Space Failover)
+
+By default, this app uses the public HF Space `multimodalart/qwen-image-multiple-angles-3d-camera` — shared ZeroGPU quota with everyone. If many people use it simultaneously, the queue can get long.
+
+To get **unlimited** (or much higher) GPU capacity, duplicate the Space to your own Hugging Face account. This gives you dedicated ZeroGPU quota separate from the public Space.
+
+### Setup
+
+1. Click this link to duplicate the Space (free, takes 30 seconds):
+   👉 https://huggingface.co/spaces/multimodalart/qwen-image-multiple-angles-3d-camera?duplicate=true
+
+2. After duplication completes (~2 minutes), you'll get a URL like:
+   ```
+   https://your-username-qwen-image-multiple-angles-3d-camera.hf.space
+   ```
+
+3. Set the `HF_SPACE_URLS` environment variable in your deployment:
+   ```
+   HF_SPACE_URLS=https://your-username-qwen-image-multiple-angles-3d-camera.hf.space
+   ```
+
+4. (Optional) Duplicate multiple times and comma-separate URLs for round-robin failover:
+   ```
+   HF_SPACE_URLS=https://user1-space.hf.space,https://user2-space.hf.space,https://multimodalart-qwen-image-multiple-angles-3d-camera.hf.space
+   ```
+
+5. Redeploy. The app will automatically:
+   - Try each Space in order
+   - Skip Spaces with long queues (>50 people or >3min ETA)
+   - Fall back to the next Space on any error
+   - Use the original public Space as final fallback
+
+### How failover works
+
+When you click "Generate":
+1. The API route calls `generateCameraEdit(image, params)`
+2. The client iterates through `HF_SPACE_URLS` (or default public Space)
+3. For each Space:
+   - Uploads the image
+   - Joins the queue
+   - Streams SSE updates
+   - If queue >50 or ETA >3min → abandon, try next Space
+   - If process_completed → download result, return
+4. If all Spaces fail → return error to user
+
+### Vercel env var setup
+
+In Vercel dashboard → Project → Settings → Environment Variables:
+- Name: `HF_SPACE_URLS`
+- Value: `https://your-username-qwen-image-multiple-angles-3d-camera.hf.space`
+- Environment: Production (and Preview if you want)
+
+After saving, redeploy for it to take effect.
+
 ## Deploy to Vercel
 
 This is a standard Next.js 16 app — deploy like any other:
