@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useGenerate } from "@/components/camera/use-generate";
+import { useDeploymentMode } from "@/lib/deployment";
 
 interface Props {
   sourceImage: string | null;
@@ -26,6 +27,8 @@ export function ResultViewer({
   const { generate, isGenerating: hookGenerating } = useGenerate();
   const onRegenerate = () => generate();
   const generating = isGenerating || hookGenerating;
+  const mode = useDeploymentMode();
+  const regenerateDisabled = generating || mode === "showcase" || mode === "loading";
   const [showCompare, setShowCompare] = useState(false);
   const [zoomOpen, setZoomOpen] = useState(false);
 
@@ -169,7 +172,7 @@ export function ResultViewer({
             variant="outline"
             size="sm"
             onClick={onRegenerate}
-            disabled={generating}
+            disabled={regenerateDisabled}
             className="shrink-0 gap-1.5 text-xs"
           >
             <RefreshCw className={cn("h-3.5 w-3.5", generating && "animate-spin")} />

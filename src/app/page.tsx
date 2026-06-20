@@ -17,6 +17,7 @@ import { CameraControls } from "@/components/camera/camera-controls";
 import { ResultViewer } from "@/components/camera/result-viewer";
 import { HistoryGallery } from "@/components/camera/history-gallery";
 import { GenerateButton } from "@/components/camera/generate-button";
+import { ShowcaseBanner } from "@/components/camera/showcase-banner";
 import {
   Dialog,
   DialogContent,
@@ -52,6 +53,8 @@ export default function Home() {
 
   return (
     <div className="min-h-screen flex flex-col">
+      {/* Showcase banner (only rendered in showcase mode) */}
+      <ShowcaseBanner />
       {/* Header */}
       <header className="sticky top-0 z-30 border-b border-white/10 bg-background/80 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
