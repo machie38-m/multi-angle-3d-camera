@@ -31,7 +31,49 @@
 /** Default Space URLs to try (in order). */
 const DEFAULT_SPACE_URLS = [
   "https://multimodalart-qwen-image-multiple-angles-3d-camera.hf.space",
+  // User can add their own duplicated Spaces via HF_SPACE_URLS env var
+  // for dedicated ZeroGPU quota. Each duplicated Space adds ~10hrs/day free.
 ];
+
+/**
+ * Max number of concurrent requests the client will allow per Space.
+ *
+ * HF Space ZeroGPU can handle multiple parallel requests per session,
+ * but queuing too many at once hurts everyone. We cap concurrent calls
+ * per Space at 3 (empirically safe limit).
+ */
+const MAX_CONCURRENT_PER_SPACE = 3;
+
+/** Track in-flight request count per Space for load balancing. */
+const inFlightPerSpace = new Map<string, number>();
+
+function getInFlight(spaceUrl: string): number {
+  return inFlightPerSpace.get(spaceUrl) ?? 0;
+}
+
+function incrementInFlight(spaceUrl: string): void {
+  inFlightPerSpace.set(spaceUrl, getInFlight(spaceUrl) + 1);
+}
+
+function decrementInFlight(spaceUrl: string): void {
+  const current = getInFlight(spaceUrl);
+  inFlightPerSpace.set(spaceUrl, Math.max(0, current - 1));
+}
+
+/**
+ * Pick the best Space URL to try first.
+ *
+ * Strategy: prefer Spaces with the fewest in-flight requests (load balancing).
+ * Falls back to the original order for ties.
+ */
+function pickSpaceOrder(spaceUrls: string[]): string[] {
+  return [...spaceUrls].sort((a, b) => {
+    const aInFlight = getInFlight(a);
+    const bInFlight = getInFlight(b);
+    if (aInFlight !== bInFlight) return aInFlight - bInFlight;
+    return 0; // preserve original order for ties
+  });
+}
 
 /**
  * Get the list of Space URLs to try, from env var or default.
@@ -327,18 +369,28 @@ async function trySingleSpace(
 }
 
 /**
- * Generate a camera-angle edit with automatic multi-Space failover.
+ * Generate a camera-angle edit with automatic multi-Space failover
+ * and in-flight load balancing.
  *
- * Tries each Space URL in order. If a Space has a long queue (>50 people
- * or >3min ETA), errors out, or is sleeping, the next Space is tried.
+ * Tries each Space URL in order (sorted by least in-flight requests).
+ * If a Space has a long queue (>50 people or >3min ETA), errors out,
+ * or is sleeping, the next Space is tried.
  *
- * To add more capacity, duplicate the Space to your own HF account and
- * set the HF_SPACE_URLS env var with your Space URL(s):
+ * ## Adding capacity (free)
  *
- *   HF_SPACE_URLS=https://youruser-qwen-image-multiple-angles-3d-camera.hf.space
+ * 1. Duplicate the Space to your own HF account (free, gives you ~10hrs
+ *    ZeroGPU quota per day per account):
+ *    https://huggingface.co/spaces/multimodalart/qwen-image-multiple-angles-3d-camera?duplicate=true
  *
- * Duplicating gives you dedicated ZeroGPU quota separate from the public
- * Space. Multiple URLs can be comma-separated for round-robin failover.
+ * 2. Set HF_SPACE_URLS env var with your Space URL(s):
+ *    HF_SPACE_URLS=https://youruser-qwen-image-multiple-angles-3d-camera.hf.space
+ *
+ * 3. Multiple URLs comma-separated for more capacity:
+ *    HF_SPACE_URLS=https://user1-space.hf.space,https://user2-space.hf.space
+ *
+ * Each HF account you create adds ~10hrs/day free GPU quota. With N
+ * accounts, you get ~N × 10hrs/day total — practically unlimited for
+ * personal use.
  */
 export async function generateCameraEdit(
   sourceImageDataUrl: string,
@@ -352,14 +404,26 @@ export async function generateCameraEdit(
     height?: number;
   }
 ): Promise<HfSpaceResult> {
-  const spaceUrls = getSpaceUrls();
+  const allSpaceUrls = getSpaceUrls();
+  // Sort by least in-flight requests (load balancing)
+  const spaceUrls = pickSpaceOrder(allSpaceUrls);
   const errors: string[] = [];
 
   for (let i = 0; i < spaceUrls.length; i++) {
     const spaceUrl = spaceUrls[i];
+    const inFlight = getInFlight(spaceUrl);
     console.log(
-      `[hf-space] Trying Space ${i + 1}/${spaceUrls.length}: ${spaceUrl}`
+      `[hf-space] Trying Space ${i + 1}/${spaceUrls.length}: ${spaceUrl} (in-flight: ${inFlight})`
     );
+
+    // Skip if too many concurrent requests on this Space
+    if (inFlight >= MAX_CONCURRENT_PER_SPACE) {
+      console.log(`[hf-space] ⏭️ ${spaceUrl} at capacity (${inFlight}/${MAX_CONCURRENT_PER_SPACE})`);
+      errors.push(`${spaceUrl}: at capacity (${inFlight} in-flight)`);
+      continue;
+    }
+
+    incrementInFlight(spaceUrl);
     try {
       const result = await trySingleSpace(spaceUrl, sourceImageDataUrl, params, options);
       console.log(`[hf-space] ✅ Success from ${spaceUrl}`);
@@ -369,14 +433,17 @@ export async function generateCameraEdit(
       console.error(`[hf-space] ❌ ${spaceUrl} failed: ${msg}`);
       errors.push(`${spaceUrl}: ${msg}`);
       // Continue to next Space
+    } finally {
+      decrementInFlight(spaceUrl);
     }
   }
 
   throw new Error(
     `All HF Spaces failed. Tried ${spaceUrls.length} Space(s). Errors:\n${errors.join("\n")}\n\n` +
-      `To add more capacity, duplicate the Space to your own HF account:\n` +
+      `To add more capacity (free), duplicate the Space to your own HF account:\n` +
       `https://huggingface.co/spaces/multimodalart/qwen-image-multiple-angles-3d-camera?duplicate=true\n` +
-      `Then set HF_SPACE_URLS env var with your Space URL.`
+      `Then set HF_SPACE_URLS env var with your Space URL(s).\n\n` +
+      `Each HF account you create adds ~10hrs/day free ZeroGPU quota.`
   );
 }
 
