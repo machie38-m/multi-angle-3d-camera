@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildCameraPrompt, type CameraParams } from "@/lib/camera";
 import { loadZaiConfig, callZaiImageEdit } from "@/lib/zai-client";
+import { callPollinationsImageEdit } from "@/lib/pollinations-client";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // 5 min — generation can take a while
@@ -90,62 +91,79 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const config = await loadZaiConfig();
-    if (!config) {
-      return NextResponse.json(
-        {
-          error:
-            "Z.AI config not found. Set ZAI_PUBLIC_API_KEY environment variable " +
-            "(get one at https://z.ai → API Keys). On the Z.ai sandbox, " +
-            "config is auto-injected at /etc/.z-ai-config.",
-        },
-        { status: 500 }
-      );
-    }
-
     const finalSize =
       size && SUPPORTED_SIZES.has(size) ? size : pickSizeFromImage(image);
 
     const prompt = buildCameraPrompt(params);
 
-    let result;
-    try {
-      result = await callZaiImageEdit(config, {
-        prompt,
-        image,
-        size: finalSize,
-      });
-    } catch (apiErr) {
-      const msg = apiErr instanceof Error ? apiErr.message : String(apiErr);
-      console.error("[/api/generate] API call failed:", msg);
+    // Try providers in order of preference:
+    //   1. Z.AI sandbox config (auto-injected on Z.ai sandbox)
+    //   2. Z.AI public API (if ZAI_PUBLIC_API_KEY env var is set)
+    //   3. Pollinations.ai (free, no auth — always available)
+    const zaiConfig = await loadZaiConfig();
+
+    let base64: string | undefined;
+    let provider: "sandbox" | "zai-public" | "pollinations" = "pollinations";
+    let debugInfo: Record<string, unknown> = {};
+
+    if (zaiConfig) {
+      provider = zaiConfig.isSandbox ? "sandbox" : "zai-public";
+      try {
+        const result = await callZaiImageEdit(zaiConfig, {
+          prompt,
+          image,
+          size: finalSize,
+        });
+        base64 = result.base64;
+        debugInfo.raw = JSON.stringify(result.raw).slice(0, 200);
+      } catch (apiErr) {
+        const msg = apiErr instanceof Error ? apiErr.message : String(apiErr);
+        console.error(`[/api/generate] ${provider} failed, falling back to Pollinations:`, msg);
+        // Fall through to Pollinations
+        provider = "pollinations";
+      }
+    }
+
+    if (!base64 && provider === "pollinations") {
+      try {
+        const result = await callPollinationsImageEdit({
+          prompt,
+          imageDataUrl: image,
+          size: finalSize,
+        });
+        base64 = result.base64;
+        debugInfo.sourceUrl = result.sourceUrl;
+        debugInfo.pollinationsUrl = result.pollinationsUrl;
+      } catch (pollErr) {
+        const msg = pollErr instanceof Error ? pollErr.message : String(pollErr);
+        console.error("[/api/generate] Pollinations failed:", msg);
+        return NextResponse.json(
+          {
+            error:
+              "All image generation providers failed. Last error from Pollinations: " +
+              msg,
+          },
+          { status: 502 }
+        );
+      }
+    }
+
+    if (!base64) {
       return NextResponse.json(
-        {
-          error:
-            "Image generation API call failed. " +
-            `Detail: ${msg}`,
-        },
+        { error: "No image data returned from any provider.", debug: debugInfo },
         { status: 502 }
       );
     }
 
-    if (!result.base64) {
-      return NextResponse.json(
-        {
-          error: "Image edit API returned no image data.",
-          raw: JSON.stringify(result.raw).slice(0, 500),
-        },
-        { status: 502 }
-      );
-    }
-
-    const dataUrl = `data:image/png;base64,${result.base64}`;
+    const dataUrl = `data:image/png;base64,${base64}`;
 
     return NextResponse.json({
       image: dataUrl,
       prompt,
       params,
       size: finalSize,
-      mode: config.isSandbox ? "sandbox" : "public",
+      provider,
+      debug: debugInfo,
     });
   } catch (err: unknown) {
     console.error("[/api/generate] error:", err);
@@ -161,5 +179,6 @@ export async function GET() {
     service: "multi-angle-3d-camera",
     description:
       "POST a base64 image and camera params {azimuth, elevation, distance} to generate a new view.",
+    providers: ["sandbox", "zai-public", "pollinations"],
   });
 }

@@ -3,19 +3,24 @@
 import { useEffect, useState } from "react";
 
 /**
- * Deployment mode. Determined at runtime by calling /api/status.
+ * Active generation provider. Determined at runtime by calling /api/status.
  *
- * - "loading"     — initial state, before status check completes
- * - "sandbox"     — running inside the Z.ai sandbox (full feature, JWT auto-injected)
- * - "public"      — running on Vercel/Netlify/etc. with a valid ZAI_PUBLIC_API_KEY
- * - "showcase"    — no Z.AI config available; UI works but generation disabled
+ * - "loading"      — initial state, before status check completes
+ * - "sandbox"      — Z.ai sandbox (auto-injected config, best quality)
+ * - "zai-public"   — Z.AI public API key set via env var
+ * - "pollinations" — Pollinations.ai free tier (always available as fallback)
  */
-export type DeploymentMode = "loading" | "sandbox" | "public" | "showcase";
+export type GenerationProvider =
+  | "loading"
+  | "sandbox"
+  | "zai-public"
+  | "pollinations";
 
 interface StatusResponse {
   generationEnabled: boolean;
-  mode: DeploymentMode;
-  reason?: string;
+  provider: GenerationProvider;
+  mode?: string;
+  note?: string;
 }
 
 let cachedStatus: StatusResponse | null = null;
@@ -32,11 +37,11 @@ async function fetchStatus(): Promise<StatusResponse> {
       return data;
     })
     .catch(() => {
-      // Network error — assume showcase
+      // Network error — assume Pollinations fallback is available
       const fallback: StatusResponse = {
-        generationEnabled: false,
-        mode: "showcase",
-        reason: "Failed to check API status.",
+        generationEnabled: true,
+        provider: "pollinations",
+        note: "Status check failed; assuming Pollinations fallback.",
       };
       cachedStatus = fallback;
       return fallback;
@@ -49,49 +54,70 @@ async function fetchStatus(): Promise<StatusResponse> {
 }
 
 /**
- * React hook that returns the current deployment mode. Calls /api/status
+ * React hook that returns the active generation provider. Calls /api/status
  * once on mount and caches the result for the rest of the session.
  */
-export function useDeploymentMode(): DeploymentMode {
-  const [mode, setMode] = useState<DeploymentMode>("loading");
+export function useGenerationProvider(): GenerationProvider {
+  const [provider, setProvider] = useState<GenerationProvider>("loading");
 
   useEffect(() => {
     let mounted = true;
     fetchStatus().then((s) => {
-      if (mounted) setMode(s.mode);
+      if (mounted) setProvider(s.provider);
     });
     return () => {
       mounted = false;
     };
   }, []);
 
-  return mode;
+  return provider;
 }
 
 /**
- * Synchronous helper for code that runs outside React hooks
- * (e.g. inside event handlers). Returns the cached status if available,
- * or null if not yet fetched.
+ * Synchronous helper for code that runs outside React hooks.
+ * Returns the cached provider if available, or null if not yet fetched.
  */
-export function getDeploymentModeSync(): DeploymentMode | null {
-  return cachedStatus?.mode ?? null;
+export function getGenerationProviderSync(): GenerationProvider | null {
+  return cachedStatus?.provider ?? null;
 }
 
 /**
- * Returns true if generation is enabled (sandbox or public mode).
+ * Returns true if generation is enabled. Always true — Pollinations is
+ * always available as a fallback even without any API key.
  */
 export function isGenerationEnabled(): boolean {
-  return cachedStatus?.generationEnabled ?? false;
+  return cachedStatus?.generationEnabled ?? true;
 }
 
 /**
- * Returns a human-friendly explanation for why generation is disabled.
+ * Returns a short human-friendly label for the active provider.
+ * Used in the UI to give users transparency about which backend is in use.
  */
-export function getShowcaseReason(): string {
-  if (cachedStatus?.reason) return cachedStatus.reason;
-  return (
-    "Image generation is disabled in this deployment. To enable it, set " +
-    "the ZAI_PUBLIC_API_KEY environment variable to your Z.AI public API key " +
-    "(get one at https://z.ai → API Keys)."
-  );
+export function getProviderLabel(provider: GenerationProvider): string {
+  switch (provider) {
+    case "sandbox":
+      return "Z.ai Sandbox";
+    case "zai-public":
+      return "Z.AI Public API";
+    case "pollinations":
+      return "Pollinations.ai (free)";
+    case "loading":
+      return "Checking…";
+  }
+}
+
+/**
+ * Returns a longer description of the active provider for tooltips.
+ */
+export function getProviderDescription(provider: GenerationProvider): string {
+  switch (provider) {
+    case "sandbox":
+      return "Running inside the Z.ai sandbox — full-quality image generation via Z.AI.";
+    case "zai-public":
+      return "Using Z.AI public API. Highest quality. Configured via ZAI_PUBLIC_API_KEY env var.";
+    case "pollinations":
+      return "Using Pollinations.ai free tier. No signup required, but quality may be lower than Z.AI. Set ZAI_PUBLIC_API_KEY for higher-quality generation.";
+    case "loading":
+      return "Checking which image generation provider is available…";
+  }
 }

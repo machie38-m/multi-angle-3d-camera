@@ -11,7 +11,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useGenerate } from "@/components/camera/use-generate";
-import { useDeploymentMode } from "@/lib/deployment";
 
 interface Props {
   sourceImage: string | null;
@@ -27,8 +26,7 @@ export function ResultViewer({
   const { generate, isGenerating: hookGenerating } = useGenerate();
   const onRegenerate = () => generate();
   const generating = isGenerating || hookGenerating;
-  const mode = useDeploymentMode();
-  const regenerateDisabled = generating || mode === "showcase" || mode === "loading";
+  const regenerateDisabled = generating;
   const [showCompare, setShowCompare] = useState(false);
   const [zoomOpen, setZoomOpen] = useState(false);
 

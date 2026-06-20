@@ -17,7 +17,7 @@ import { CameraControls } from "@/components/camera/camera-controls";
 import { ResultViewer } from "@/components/camera/result-viewer";
 import { HistoryGallery } from "@/components/camera/history-gallery";
 import { GenerateButton } from "@/components/camera/generate-button";
-import { ShowcaseBanner } from "@/components/camera/showcase-banner";
+import { ProviderBadge } from "@/components/camera/provider-badge";
 import {
   Dialog,
   DialogContent,
@@ -53,8 +53,6 @@ export default function Home() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      {/* Showcase banner (only rendered in showcase mode) */}
-      <ShowcaseBanner />
       {/* Header */}
       <header className="sticky top-0 z-30 border-b border-white/10 bg-background/80 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
@@ -73,6 +71,7 @@ export default function Home() {
           </div>
 
           <div className="flex items-center gap-2">
+            <ProviderBadge />
             <div className="hidden items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-[11px] font-medium text-primary sm:inline-flex">
               <InfinityIcon className="h-3.5 w-3.5" />
               Unlimited
